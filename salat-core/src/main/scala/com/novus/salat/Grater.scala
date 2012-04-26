@@ -145,6 +145,7 @@ abstract class ConcreteGrater[X <: CaseClass](clazz: Class[X])(implicit ctx: Con
   protected def outField: OutHandler = {
     case (_, field) if field.ignore => None
     case (null, _)                  => None
+    case (Some(element: AnyRef), field) => Some(cachedFieldName(field) -> toDBObject(element))
     case (element, field) => {
       field.out_!(element) match {
         case Some(None) => None
@@ -165,12 +166,9 @@ abstract class ConcreteGrater[X <: CaseClass](clazz: Class[X])(implicit ctx: Con
 
           serialized match {
             case serialized if ctx.suppressDefaultArgs && defaultArg(field).suppress(serialized) => None
-            case serialized => {
+            case serialized: AnyRef => {
               val key = cachedFieldName(field)
-              val value = serialized match {
-                case Some(unwrapped) => unwrapped
-                case _               => serialized
-              }
+              val value = toDBObject(serialized)
               Some(key -> value)
             }
           }
@@ -353,7 +351,11 @@ abstract class ConcreteGrater[X <: CaseClass](clazz: Class[X])(implicit ctx: Con
         case field => {
           dbo.get(cachedFieldName(field)) match {
             case Some(value) => {
-              field.in_!(value)
+              field.in_!(value) match {
+                case Some(x: scala.collection.Map[_, _]) => Some(x.mapValues(toObject(_)))
+                case Some(x: scala.collection.Traversable[_]) => Some(x.map(toObject(_)))
+                case Some(x) => Some(toObject(x))
+              }
             }
             case _ => safeDefault(field)
           }
@@ -448,6 +450,38 @@ abstract class ConcreteGrater[X <: CaseClass](clazz: Class[X])(implicit ctx: Con
     // pad out with extra fields to persist
     extraFieldsToPersist.foreach(f => builder += f._2 -> DefaultArg(clazz, f._2, None))
     builder.result()
+  }
+
+  protected[salat] def toObject(value: Any): Any = value match {
+    case y: BasicDBObject if ctx.extractTypeHint(y).isDefined => ctx.lookup(y).asObject(y)
+    case y: BasicDBObject => y.mapValues(toObject(_)).toMap
+    case y: BasicDBList => y.map(toObject(_)).toList
+    case Some(x) => Some(toObject(x))
+    case _ => value
+  }
+
+  protected[salat] def toDBObject(value: AnyRef): Any = value match {
+    case y if ctx.lookup_?(y.getClass.getName).isDefined => grater[y.type].asDBObject(y)
+    case x: BasicDBObject =>  map2DBObject(x)
+    case x: BasicDBList => list2DBList(x)
+    case x: scala.collection.Map[_, AnyRef] => map2DBObject(x)
+    case x: scala.collection.Traversable[AnyRef] => list2DBList(x)
+    case Some(x: AnyRef) => toDBObject(x)
+    case _ => value
+  }
+
+  protected[salat] def map2DBObject(x: scala.collection.Map[_, AnyRef]) = {
+    val builder = MongoDBObject.newBuilder
+    x.foreach {
+      case (k, el) =>
+        builder += k.toString -> toDBObject(el)
+    }
+
+    builder.result()
+  }
+
+  protected[salat] def list2DBList(x: scala.collection.Traversable[AnyRef]) = {
+    MongoDBList(x.map(toDBObject(_)).toList: _*)
   }
 }
 
