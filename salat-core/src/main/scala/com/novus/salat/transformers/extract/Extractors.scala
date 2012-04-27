@@ -145,6 +145,32 @@ package out {
 
   import com.novus.salat.annotations.EnumAs
 
+  object UtilsExtractor {
+    def toDBObject(value: Any)(implicit ctx: Context): Any = value match {
+      case y: AnyRef if ctx.lookup_?(y.asInstanceOf[AnyRef].getClass.getName).isDefined => grater[y.type].asDBObject(y)
+      case x: BasicDBObject =>  map2DBObject(x)
+      case x: BasicDBList => list2DBList(x)
+      case x: scala.collection.Map[_, AnyRef] => map2DBObject(x)
+      case x: scala.collection.Traversable[AnyRef] => list2DBList(x)
+      case Some(x: AnyRef) => toDBObject(x)
+      case _ => value
+    }
+
+    private def map2DBObject(x: scala.collection.Map[_, AnyRef])(implicit ctx: Context) = {
+      val builder = MongoDBObject.newBuilder
+      x.foreach {
+        case (k, el) =>
+          builder += k.toString -> toDBObject(el)
+      }
+
+      builder.result()
+    }
+
+    private  def list2DBList(x: scala.collection.Traversable[AnyRef])(implicit cxt: Context) = {
+      MongoDBList(x.map(toDBObject(_)).toList: _*)
+    }
+  }
+
   trait BigDecimalExtractor extends Transformer {
     self: Transformer =>
     override def transform(value: Any)(implicit ctx: Context): Any = ctx.bigDecimalStrategy.out(value)
@@ -189,7 +215,7 @@ package out {
 
     // ok, Some(null) should never happen.  except sometimes it does.
     override def before(value: Any)(implicit ctx: Context): Option[Any] = value match {
-      case Some(value) if value != null => Some(super.transform(value))
+      case Some(value) if value != null => Some(UtilsExtractor.toDBObject(super.transform(value)))
       case _                            => None
     }
   }
@@ -201,7 +227,7 @@ package out {
     override def after(value: Any)(implicit ctx: Context): Option[Any] = value match {
       case traversable: Traversable[_] =>
         Some(MongoDBList(traversable.map {
-          case el => super.transform(el)
+          case el => UtilsExtractor.toDBObject(super.transform(el))
         }.toList: _*))
       case _ => None
     }
@@ -219,7 +245,7 @@ package out {
             builder += (k match {
               case s: String => s
               case x         => x.toString
-            }) -> super.transform(el)
+            }) -> UtilsExtractor.toDBObject(super.transform(el))
         }
         Some(builder.result)
       }

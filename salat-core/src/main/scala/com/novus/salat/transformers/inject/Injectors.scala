@@ -215,6 +215,18 @@ package in {
   import java.lang.Integer
   import com.novus.salat.annotations.EnumAs
 
+  object UtilsInjector {
+    def toObject(value: Any)(implicit ctx: Context): Any = value match {
+      case y: BasicDBObject if ctx.extractTypeHint(y).isDefined => ctx.lookup(y).asObject(y)
+      case y: BasicDBObject => y.mapValues(toObject(_)).toMap
+      case y: BasicDBList => y.map(toObject(_)).toList
+      case x: scala.collection.Map[_, _] => x.mapValues(toObject(_))
+      case x: scala.collection.Traversable[_] => x.map(toObject(_))
+      case Some(x) => Some(toObject(x))
+      case _ => value
+    }
+  }
+
   trait LongToInt extends Transformer {
     self: Transformer =>
     override def transform(value: Any)(implicit ctx: Context) = value match {
@@ -298,7 +310,7 @@ package in {
   trait OptionInjector extends Transformer {
     self: Transformer =>
     override def after(value: Any)(implicit ctx: Context): Option[Any] = value match {
-      case value if value != null => Some(Some(value))
+      case value if value != null => Some(Some(UtilsInjector.toObject(value)))
       case _                      => Some(None)
     }
   }
@@ -317,7 +329,7 @@ package in {
 
     override def after(value: Any)(implicit ctx: Context): Option[Any] = value match {
       case traversable: Traversable[_] => Some(traversableImpl(parentType, traversable.map {
-        el => super.transform(el)
+        el => UtilsInjector.toObject(super.transform(el))
       }))
       case _ => None
     }
@@ -341,7 +353,7 @@ package in {
       case mdbo: MongoDBObject => {
         val builder = MongoDBObject.newBuilder
         mdbo.foreach {
-          case (k, v) => builder += k -> super.transform(v)
+          case (k, v) => builder += k -> UtilsInjector.toObject(super.transform(v))
         }
         Some(mapImpl(parentType, builder.result))
       }
